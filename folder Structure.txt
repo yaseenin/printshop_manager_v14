@@ -1,0 +1,46 @@
+printshop_manager_v14/
+│
+├── main.py
+├── printshop_v14.db
+├── printshop_v14.db-shm
+├── printshop_v14.db-wal
+├── consumables.db
+│
+├── add_daily_table.py
+├── restore_daily_history.py
+├── folder Structure.txt
+├── README.txt
+│
+├── assets/
+│   ├── splash.png
+│   └── *other images*
+│
+├── core/
+│   ├── __init__.py
+│   ├── db.py
+│   ├── models.py
+│   ├── consumables_db.py
+│   ├── snmp.py
+│   ├── ping.py
+│   └── *other helper modules*
+│
+├── ui/
+│   ├── __init__.py
+│   ├── dashboard.py
+│   ├── machines.py
+│   ├── reports.py
+│   ├── maintenance.py
+│   ├── settings.py
+│   ├── theme.py
+│   ├── machine_window.py
+│   │
+│   └── icons/
+│       ├── app_icon.png
+│       ├── *.png printer icons
+│       └── default.png
+│
+├── printshop manual.docx
+├── printshop manual - Copy.docx
+├── printshop manual.pdf
+│
+└── __pycache__/
