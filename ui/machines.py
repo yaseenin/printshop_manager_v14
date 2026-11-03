@@ -17,10 +17,11 @@ from tkinter import ttk, messagebox
 from core.models import (
     fetch_machines,
     fetch_daily_rows,
-    fetch_latest_counter,
+    fetch_latest_counters,
     insert_machine,
     insert_counter,
     deactivate_machine,
+    fetch_machine_last_online,
 )
 from core.snmp import probe_and_read_counter
 from core.ping import ping_ip
@@ -63,6 +64,24 @@ class MachinesTab:
 
     def get_frame(self):
         return self.frame
+
+    # Mouse wheel scrolling helpers
+    def _on_tree_enter(self):
+        self.tree.bind_all("<MouseWheel>", self._on_tree_scroll)
+        self.tree.bind_all("<Button-4>", self._on_tree_scroll)
+        self.tree.bind_all("<Button-5>", self._on_tree_scroll)
+
+    def _on_tree_leave(self):
+        self.tree.unbind_all("<MouseWheel>")
+        self.tree.unbind_all("<Button-4>")
+        self.tree.unbind_all("<Button-5>")
+
+    def _on_tree_scroll(self, event):
+        if event.num == 5 or event.delta < 0:
+            self.tree.yview_scroll(3, "units")
+        elif event.num == 4 or event.delta > 0:
+            self.tree.yview_scroll(-3, "units")
+        return "break"
 
     # ------------------------------------------------------------------
     # UI BUILD
@@ -151,6 +170,13 @@ class MachinesTab:
         self.tree.configure(yscrollcommand=vsb.set)
         self.tree.pack(side="left", fill="both", expand=True)
         vsb.pack(side="right", fill="y")
+        
+        # Enable mouse wheel scrolling on treeview
+        self.tree.bind("<Enter>", lambda _: self._on_tree_enter())
+        self.tree.bind("<Leave>", lambda _: self._on_tree_leave())
+        self.tree.bind("<MouseWheel>", self._on_tree_scroll)
+        self.tree.bind("<Button-4>", self._on_tree_scroll)
+        self.tree.bind("<Button-5>", self._on_tree_scroll)
 
         # Configure columns
         col_defs = {
@@ -251,7 +277,7 @@ class MachinesTab:
 
             # Pre-ping in parallel to speed up loading
             ping_results = {}
-            with ThreadPoolExecutor(max_workers=8) as executor:
+            with ThreadPoolExecutor(max_workers=4) as executor:
                 future_to_ip = {executor.submit(ping_ip, m.get("ip", "")): m["id"] for m in machines if m.get("ip")}
                 for future in as_completed(future_to_ip):
                     mid = future_to_ip[future]
@@ -263,6 +289,12 @@ class MachinesTab:
             rows = []
             today_str = time.strftime("%Y-%m-%d")
 
+            # Batch fetch latest counters for all machines
+            try:
+                latests = fetch_latest_counters([m["id"] for m in machines])
+            except Exception:
+                latests = {}
+
             for m in machines:
                 mid = m["id"]
                 name = m.get("name", "") or "Unnamed"
@@ -272,10 +304,15 @@ class MachinesTab:
 
                 # ping
                 online = ping_results.get(mid, False)
+                
+                # Get last online time if offline
+                last_online = None
+                if not online:
+                    last_online = fetch_machine_last_online(mid)
 
-                # latest counter
+                # total counter from batched result
                 try:
-                    latest = fetch_latest_counter(mid)
+                    latest = latests.get(mid)
                     total_ctr = int(latest["total_impressions"]) if latest else 0
                 except Exception:
                     total_ctr = 0
@@ -299,6 +336,7 @@ class MachinesTab:
                         "model": model,
                         "ip": ip,
                         "online": online,
+                        "last_online": last_online,
                         "today": today_clicks,
                         "total": total_ctr,
                     }
@@ -350,7 +388,17 @@ class MachinesTab:
         for r in rows:
             mid = r["id"]
             tags = ("online",) if r["online"] else ("offline",)
-            status_txt = "Online" if r["online"] else "Offline"
+            
+            # Build status text
+            if r["online"]:
+                status_txt = "Online"
+            else:
+                last_online = r.get("last_online")
+                if last_online:
+                    status_txt = f"Last online: {last_online}"
+                else:
+                    status_txt = "Offline"
+                    
             self.tree.insert(
                 "",
                 "end",
@@ -522,7 +570,6 @@ class MachinesTab:
                 val = probe_and_read_counter(ip)
                 if val is not None:
                     insert_counter(mid, int(val))
-                    time.sleep(0.15)
                     msg = f"SNMP updated.\nNew counter: {val}"
                     ok = True
                 else:

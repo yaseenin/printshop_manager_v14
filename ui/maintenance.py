@@ -65,6 +65,32 @@ class MaintenanceTab:
     def get_frame(self):
         return self.frame
 
+    # Mouse wheel scrolling helpers for canvas
+    def _on_canvas_enter(self):
+        self.canvas.bind_all("<MouseWheel>", self._on_canvas_scroll)
+        self.canvas.bind_all("<Button-4>", self._on_canvas_scroll)
+        self.canvas.bind_all("<Button-5>", self._on_canvas_scroll)
+
+    def _on_canvas_leave(self):
+        self.canvas.unbind_all("<MouseWheel>")
+        self.canvas.unbind_all("<Button-4>")
+        self.canvas.unbind_all("<Button-5>")
+
+    def _on_canvas_scroll(self, event):
+        if event.num == 5 or event.delta < 0:
+            self.canvas.yview_scroll(3, "units")
+        elif event.num == 4 or event.delta > 0:
+            self.canvas.yview_scroll(-3, "units")
+        return "break"
+
+    # Mouse wheel scrolling helpers for treeviews
+    def _on_treeview_scroll(self, treeview, event):
+        if event.num == 5 or event.delta < 0:
+            treeview.yview_scroll(3, "units")
+        elif event.num == 4 or event.delta > 0:
+            treeview.yview_scroll(-3, "units")
+        return "break"
+
     # -------------------------------------------------------------------
     #  BUILD – PAGE 1 – CONSUMABLES
     # -------------------------------------------------------------------
@@ -105,21 +131,40 @@ class MaintenanceTab:
             "<Configure>",
             lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")),
         )
+        
+        # Enable mouse wheel scrolling on canvas
+        self.canvas.bind("<Enter>", lambda _: self._on_canvas_enter())
+        self.canvas.bind("<Leave>", lambda _: self._on_canvas_leave())
+        self.canvas.bind("<MouseWheel>", self._on_canvas_scroll)
+        self.canvas.bind("<Button-4>", self._on_canvas_scroll)
+        self.canvas.bind("<Button-5>", self._on_canvas_scroll)
 
     # -------------------------------------------------------------------
     #  BUILD – PAGE 2 – YIELD SUMMARY
     # -------------------------------------------------------------------
     def _build_yield_ui(self):
 
-        frame = ttk.Frame(self.page_yield)
-        frame.pack(fill="both", expand=True, padx=10, pady=10)
-
+        top_frame = ttk.Frame(self.page_yield)
+        top_frame.pack(fill="x", padx=10, pady=(10, 5))
+        
         ttk.Label(
-            frame,
+            top_frame,
             text="Yield Summary (Used clicks per consumable)",
             font=("Arial", 16, "bold"),
             foreground=self.FG_TEXT,
-        ).pack(anchor="w", pady=(0, 10))
+        ).pack(side="left")
+
+        # Filter
+        ttk.Label(top_frame, text="Filter:", foreground=self.FG_TEXT).pack(side="left", padx=(20, 5))
+        self.yield_machine_var = tk.StringVar(value="All Machines")
+        self.yield_machine_combo = ttk.Combobox(
+            top_frame, textvariable=self.yield_machine_var, state="readonly", width=30
+        )
+        self.yield_machine_combo.pack(side="left")
+        self.yield_machine_combo.bind("<<ComboboxSelected>>", lambda e: self._load_yield())
+
+        frame = ttk.Frame(self.page_yield)
+        frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
 
         columns = ("machine", "consumable", "category",
                    "last", "used", "percent")
@@ -128,6 +173,13 @@ class MaintenanceTab:
             frame, columns=columns, show="headings", height=20
         )
         self.yield_tree.pack(fill="both", expand=True)
+        
+        # Enable mouse wheel scrolling on yield treeview
+        self.yield_tree.bind("<Enter>", lambda _: self._bind_treeview(self.yield_tree))
+        self.yield_tree.bind("<Leave>", lambda _: self._unbind_treeview())
+        self.yield_tree.bind("<MouseWheel>", lambda e: self._on_treeview_scroll(self.yield_tree, e))
+        self.yield_tree.bind("<Button-4>", lambda e: self._on_treeview_scroll(self.yield_tree, e))
+        self.yield_tree.bind("<Button-5>", lambda e: self._on_treeview_scroll(self.yield_tree, e))
 
         headers = {
             "machine": "Machine",
@@ -142,24 +194,34 @@ class MaintenanceTab:
             self.yield_tree.heading(col, text=txt)
             self.yield_tree.column(col, width=140, anchor="w")
 
-        ttk.Button(frame, text="Refresh", command=self._load_yield).pack(
-            anchor="e", pady=6
-        )
+        ttk.Button(top_frame, text="Refresh", command=self._load_yield).pack(side="right")
 
     # -------------------------------------------------------------------
     #  BUILD – PAGE 3 – LOG VIEWER
     # -------------------------------------------------------------------
     def _build_logs_ui(self):
 
-        frame = ttk.Frame(self.page_logs)
-        frame.pack(fill="both", expand=True, padx=10, pady=10)
+        top_frame = ttk.Frame(self.page_logs)
+        top_frame.pack(fill="x", padx=10, pady=(10, 5))
 
         ttk.Label(
-            frame,
+            top_frame,
             text="Consumable Replacement Log",
             font=("Arial", 16, "bold"),
             foreground=self.FG_TEXT,
-        ).pack(anchor="w", pady=(0, 10))
+        ).pack(side="left")
+
+        # Filter
+        ttk.Label(top_frame, text="Filter:", foreground=self.FG_TEXT).pack(side="left", padx=(20, 5))
+        self.log_machine_var = tk.StringVar(value="All Machines")
+        self.log_machine_combo = ttk.Combobox(
+            top_frame, textvariable=self.log_machine_var, state="readonly", width=30
+        )
+        self.log_machine_combo.pack(side="left")
+        self.log_machine_combo.bind("<<ComboboxSelected>>", lambda e: self._load_logs())
+
+        frame = ttk.Frame(self.page_logs)
+        frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
 
         cols = ("ts", "machine", "consumable",
                 "old", "new", "yield", "note")
@@ -171,6 +233,13 @@ class MaintenanceTab:
             height=25,
         )
         self.logs_tree.pack(fill="both", expand=True)
+        
+        # Enable mouse wheel scrolling on logs treeview
+        self.logs_tree.bind("<Enter>", lambda _: self._bind_treeview(self.logs_tree))
+        self.logs_tree.bind("<Leave>", lambda _: self._unbind_treeview())
+        self.logs_tree.bind("<MouseWheel>", lambda e: self._on_treeview_scroll(self.logs_tree, e))
+        self.logs_tree.bind("<Button-4>", lambda e: self._on_treeview_scroll(self.logs_tree, e))
+        self.logs_tree.bind("<Button-5>", lambda e: self._on_treeview_scroll(self.logs_tree, e))
 
         headers = {
             "ts": "Date",
@@ -186,9 +255,7 @@ class MaintenanceTab:
             self.logs_tree.heading(col, text=txt)
             self.logs_tree.column(col, width=140, anchor="w")
 
-        ttk.Button(frame, text="Refresh", command=self._load_logs).pack(
-            anchor="e", pady=6
-        )
+        ttk.Button(top_frame, text="Refresh", command=self._load_logs).pack(side="right")
 
     # -------------------------------------------------------------------
     #  TAB CHANGE = auto refresh correct page
@@ -201,6 +268,22 @@ class MaintenanceTab:
             self._load_yield()
         elif tab == "Replacement Log":
             self._load_logs()
+
+    def _bind_treeview(self, treeview):
+        treeview.bind_all("<MouseWheel>", lambda e: self._on_treeview_scroll(treeview, e))
+        treeview.bind_all("<Button-4>", lambda e: self._on_treeview_scroll(treeview, e))
+        treeview.bind_all("<Button-5>", lambda e: self._on_treeview_scroll(treeview, e))
+
+    def _unbind_treeview(self):
+        try:
+            self.yield_tree.unbind_all("<MouseWheel>")
+            self.yield_tree.unbind_all("<Button-4>")
+            self.yield_tree.unbind_all("<Button-5>")
+            self.logs_tree.unbind_all("<MouseWheel>")
+            self.logs_tree.unbind_all("<Button-4>")
+            self.logs_tree.unbind_all("<Button-5>")
+        except Exception:
+            pass
 
     # -------------------------------------------------------------------
     #  MAIN REFRESH
@@ -292,6 +375,7 @@ class MaintenanceTab:
         self.status_lbl.config(
             text=f"{len(self._machines_data)} machine(s) loaded."
         )
+        self._update_filter_dropdowns()
 
         # ensure canvas scrollregion updated
         self.canvas.update_idletasks()
@@ -442,6 +526,24 @@ class MaintenanceTab:
                         lambda e, m=mid: self._update_consumable_info(m))
 
         self._populate_consumable_dropdown(mid)
+
+    def _update_filter_dropdowns(self):
+        items = ["All Machines"]
+        for m in self._machines_data:
+            items.append(f"{m['name']} ({m['id']})")
+        
+        if hasattr(self, 'yield_machine_combo'):
+            curr = self.yield_machine_var.get()
+            self.yield_machine_combo['values'] = items
+            if curr not in items:
+                self.yield_machine_combo.current(0)
+        
+        if hasattr(self, 'log_machine_combo'):
+            curr = self.log_machine_var.get()
+            self.log_machine_combo['values'] = items
+            if curr not in items:
+                self.log_machine_combo.current(0)
+
     # -------------------------------------------------------------------
     # DROPDOWN HANDLERS
     # -------------------------------------------------------------------
@@ -551,8 +653,19 @@ class MaintenanceTab:
     def _load_yield(self):
         self.yield_tree.delete(*self.yield_tree.get_children())
 
+        target_mid = None
+        sel = self.yield_machine_var.get()
+        if sel != "All Machines":
+            try:
+                target_mid = int(sel.split("(")[-1].strip(")"))
+            except:
+                pass
+
         for m in self._machines_data:
             mid = m["id"]
+            if target_mid is not None and mid != target_mid:
+                continue
+
             name = m["name"]
             ctr = m["current_ctr"]
 
@@ -583,6 +696,14 @@ class MaintenanceTab:
     def _load_logs(self):
         self.logs_tree.delete(*self.logs_tree.get_children())
 
+        target_mid = None
+        sel = self.log_machine_var.get()
+        if sel != "All Machines":
+            try:
+                target_mid = int(sel.split("(")[-1].strip(")"))
+            except:
+                pass
+
         # build lookup mid -> name from current machines list
         mid_to_name = {m["id"]: m["name"] for m in self._machines_data}
 
@@ -600,6 +721,9 @@ class MaintenanceTab:
                 new_ctr = row[5] if len(row) > 5 else 0
                 used = row[6] if len(row) > 6 else 0
                 note = row[7] if len(row) > 7 else ""
+
+            if target_mid is not None and mid != target_mid:
+                continue
 
             # resolve machine name; if not available, show "Machine <id>"
             machine = mid_to_name.get(mid, f"Machine {mid}" if mid is not None else "Unknown")

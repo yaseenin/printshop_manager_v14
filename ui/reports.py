@@ -24,6 +24,7 @@ from core.models import (
     fetch_machines,
     fetch_daily_rows,
     fetch_latest_counter,
+    build_daily_start_end_from_latest,
 )
 from core.ping import ping_ip
 from ui.theme import apply_theme, CURRENT_THEME
@@ -33,6 +34,13 @@ try:
     TKCAL_AVAILABLE = True
 except Exception:
     TKCAL_AVAILABLE = False
+
+# Excel support for tabs
+try:
+    from openpyxl import Workbook
+    OPENPYXL_AVAILABLE = True
+except ImportError:
+    OPENPYXL_AVAILABLE = False
 
 
 MAX_LOOKBACK_DAYS = 365
@@ -75,7 +83,8 @@ class ReportsTab:
 
         self.frame = ttk.Frame(parent)
         self._build_static_ui()
-        self.frame.after(200, self.refresh)
+        # Initial refresh after 2 seconds (not 200ms) to avoid CPU spike
+        self.frame.after(2000, self.refresh)
 
     def get_frame(self):
         return self.frame
@@ -114,12 +123,12 @@ class ReportsTab:
 
             ttk.Button(dp, text="Apply", command=self._apply_custom_range).pack(side="left", padx=4)
 
-        ttk.Button(top, text="Export All", command=self._on_export_all).pack(side="right")
+        ttk.Button(top, text="📊 Export All", command=self._on_export_all).pack(side="right")
 
         self.subtitle_lbl = ttk.Label(self.frame, text="", foreground=self._FG_TEXT)
         self.subtitle_lbl.pack(anchor="w", padx=12)
 
-        # Scroll area
+        # Scroll area with improved styling
         self.canvas = tk.Canvas(self.frame, bg=self._BG_FRAME, highlightthickness=0)
         self.scroll = ttk.Scrollbar(self.frame, orient="vertical", command=self.canvas.yview)
         self.canvas.configure(yscrollcommand=self.scroll.set)
@@ -132,14 +141,35 @@ class ReportsTab:
 
         self.inner.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
 
-        # Mouse wheel scrolling
-        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+        # Mouse wheel scrolling - proper enter/leave handlers
+        self.canvas.bind("<Enter>", self._canvas_on_enter)
+        self.canvas.bind("<Leave>", self._canvas_on_leave)
+        self.canvas.bind("<MouseWheel>", self._on_mousewheel)
+        self.canvas.bind("<Button-4>", self._on_mousewheel)
+        self.canvas.bind("<Button-5>", self._on_mousewheel)
 
         self.status_lbl = ttk.Label(self.frame, text="Loading…", foreground=self._FG_TEXT)
         self.status_lbl.pack(anchor="w", padx=10, pady=4)
 
+    def _canvas_on_enter(self, event):
+        """Bind mouse wheel to all widgets when canvas is entered."""
+        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+        self.canvas.bind_all("<Button-4>", self._on_mousewheel)
+        self.canvas.bind_all("<Button-5>", self._on_mousewheel)
+
+    def _canvas_on_leave(self, event):
+        """Unbind mouse wheel from all widgets when canvas is left."""
+        self.canvas.unbind_all("<MouseWheel>")
+        self.canvas.unbind_all("<Button-4>")
+        self.canvas.unbind_all("<Button-5>")
+
     def _on_mousewheel(self, event):
-        self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        """Handle mouse wheel scroll events."""
+        if event.num == 5 or event.delta < 0:
+            self.canvas.yview_scroll(3, "units")
+        elif event.num == 4 or event.delta > 0:
+            self.canvas.yview_scroll(-3, "units")
+        return "break"
 
     # =========================================================
     # Navigation
@@ -255,6 +285,26 @@ class ReportsTab:
             cur += timedelta(days=1)
         return out
 
+    def _aggregate_to_monthly(self, rows):
+        """Aggregate daily rows into monthly data."""
+        if not rows:
+            return []
+        
+        monthly_data = {}
+        for d, c in rows:
+            if isinstance(d, str):
+                d = datetime.strptime(d, "%Y-%m-%d").date() if isinstance(d, str) else d
+            if isinstance(d, datetime):
+                d = d.date()
+            # Use first day of month as key
+            month_key = d.replace(day=1)
+            if month_key not in monthly_data:
+                monthly_data[month_key] = 0
+            monthly_data[month_key] += c
+        
+        # Sort by date and return
+        return sorted([(d, c) for d, c in monthly_data.items()])
+
     # =========================================================
     # UI build
     # =========================================================
@@ -288,7 +338,9 @@ class ReportsTab:
     # Card with tabs
     # =========================================================
     def _create_card(self, title, subtitle, rows, is_machine, machine):
-        card = tk.Frame(self.inner, bg=self._BG_CARD, bd=1, relief="solid")
+        card = tk.Frame(self.inner, bg=self._BG_CARD, bd=0, relief="flat",
+                       highlightthickness=1, highlightbackground="#374151",
+                       highlightcolor="#3b82f6")
         card.pack(fill="x", padx=14, pady=6)
 
         header = tk.Frame(card, bg=self._BG_CARD)
@@ -302,7 +354,7 @@ class ReportsTab:
             tk.Label(header,
                      text="🟢 Online" if online else "🔴 Offline",
                      bg=self._ONLINE if online else self._OFFLINE,
-                     fg="white", padx=8).pack(side="right")
+                     fg="white", padx=8, font=("Arial", 9)).pack(side="right")
 
         if subtitle:
             tk.Label(card, text=subtitle, bg=self._BG_CARD,
@@ -337,6 +389,9 @@ class ReportsTab:
                     self._build_line_chart(content, rows, title)
                 elif name == "Bar":
                     self._build_bar_chart(content, rows, title)
+                elif name == "Monthly":
+                    monthly_rows = self._aggregate_to_monthly(rows)
+                    self._build_monthly_chart(content, monthly_rows, title)
                 else:
                     self._build_table(content, rows)
 
@@ -346,6 +401,7 @@ class ReportsTab:
 
         mk_tab("Line")
         mk_tab("Bar")
+        mk_tab("Monthly")
         mk_tab("Table")
 
         self._build_line_chart(content, rows, title)
@@ -365,7 +421,7 @@ class ReportsTab:
                 for x, y in zip(xs, ys):
                     if abs(mdates.date2num(x) - event.xdata) < 0.4:
                         annot.xy = (x, y)
-                        annot.set_text(f"{x.strftime('%d %b %Y')}\nClicks: {y}")
+                        annot.set_text(f"{x.strftime('%A, %d %b %Y')}\nClicks: {y}")
                         annot.set_visible(True)
                         fig.canvas.draw_idle()
                         return
@@ -414,6 +470,43 @@ class ReportsTab:
         canvas.get_tk_widget().pack(fill="both", expand=True)
         canvas.draw()
 
+    def _build_monthly_chart(self, parent, monthly_rows, title):
+        """Build a bar chart showing monthly aggregated data."""
+        for w in parent.winfo_children():
+            w.destroy()
+
+        if not monthly_rows:
+            tk.Label(parent, text="No monthly data available", 
+                    bg=self._BG_CARD, fg=self._FG_TEXT).pack(pady=20)
+            return
+
+        xs = [datetime.combine(d, datetime.min.time()) for d, _ in monthly_rows]
+        ys = [c for _, c in monthly_rows]
+
+        fig = Figure(figsize=(6.5, 2.8), dpi=100)
+        ax = fig.add_subplot(111)
+        
+        # Create bar chart with month labels
+        month_labels = [d.strftime("%b %Y") for d, _ in monthly_rows]
+        positions = range(len(month_labels))
+        ax.bar(positions, ys, color="#10b981", alpha=0.8)
+        ax.set_xticks(positions)
+        ax.set_xticklabels(month_labels, rotation=45, ha='right')
+        
+        ax.set_title(f"{title} - Monthly Summary", fontweight='bold')
+        ax.set_ylabel("Total Clicks")
+        ax.grid(axis='y', alpha=0.3)
+        
+        # Add value labels on top of bars
+        for i, v in enumerate(ys):
+            ax.text(i, v, f"{v:,}", ha='center', va='bottom', fontsize=9)
+        
+        fig.tight_layout()
+
+        canvas = FigureCanvasTkAgg(fig, parent)
+        canvas.get_tk_widget().pack(fill="both", expand=True)
+        canvas.draw()
+
     # =========================================================
     # Table
     # =========================================================
@@ -438,12 +531,70 @@ class ReportsTab:
             return
 
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        path = os.path.join(os.getcwd(), f"reports_{ts}.csv")
+        
+        if OPENPYXL_AVAILABLE:
+            # Export to Excel with Tabs (Combined + Per Machine)
+            path = os.path.join(os.getcwd(), f"reports_full_{ts}.xlsx")
+            try:
+                self._export_excel(path)
+                messagebox.showinfo("Export", f"Exported to Excel:\n{path}")
+            except Exception as e:
+                messagebox.showerror("Export Error", str(e))
+        else:
+            # Fallback to CSV (Combined only) if openpyxl is missing
+            path = os.path.join(os.getcwd(), f"reports_combined_{ts}.csv")
+            try:
+                with open(path, "w", newline="", encoding="utf-8") as f:
+                    w = csv.writer(f)
+                    w.writerow(["Date", "Clicks"])
+                    for d, c in self.combined_rows:
+                        w.writerow([d, c])
+                messagebox.showinfo("Export", f"Exported to CSV (Install openpyxl for Tabs):\n{path}")
+            except Exception as e:
+                messagebox.showerror("Export Error", str(e))
 
-        with open(path, "w", newline="", encoding="utf-8") as f:
-            w = csv.writer(f)
-            w.writerow(["Date", "Clicks"])
-            for d, c in self.combined_rows:
-                w.writerow([d, c])
+    def _export_excel(self, path):
+        wb = Workbook()
+        
+        # 1. Combined Tab
+        ws_comb = wb.active
+        ws_comb.title = "Combined"
+        ws_comb.append(["Date", "Total Clicks"])
+        for d, c in self.combined_rows:
+            ws_comb.append([d, c])
+            
+        # Determine lookback days needed
+        if self.custom_range:
+            # If viewing a custom past range, ensure we fetch enough history
+            start_date = self.custom_range[0]
+            days_needed = (date.today() - start_date).days + 5
+        else:
+            # If viewing relative range (e.g. last 30 days), add buffer
+            days_needed = self.days_var.get() + self.window_offset + 5
 
-        messagebox.showinfo("Export", f"Saved to {path}")
+        # 2. Machine Tabs
+        for m in self.machines:
+            mid = m["id"]
+            name = m.get("name", "") or f"Machine {mid}"
+            
+            # Sanitize sheet name (Excel limit 31 chars, no special chars)
+            safe_name = "".join(c for c in name if c.isalnum() or c in " -_")[:30]
+            
+            ws = wb.create_sheet(title=safe_name)
+            ws.append(["Date", "Start Counter", "End Counter", "Clicks"])
+            
+            # Fetch detailed data (Start/End/Clicks)
+            details = build_daily_start_end_from_latest(mid, days=days_needed)
+            
+            for row in details:
+                # Filter to match currently viewed range
+                r_date = datetime.strptime(row['date'], "%Y-%m-%d").date()
+                
+                # Check if date is within the combined_rows range
+                if self.combined_rows:
+                    min_d = self.combined_rows[0][0]
+                    max_d = self.combined_rows[-1][0]
+                    if min_d <= r_date <= max_d:
+                        ws.append([row['date'], row['start'], row['end'], row['clicks']])
+
+        wb.save(path)
