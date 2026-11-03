@@ -73,9 +73,53 @@ def init_db():
         c.execute("CREATE INDEX IF NOT EXISTS idx_m_active ON machines(active)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_c_mid ON machine_counters(machine_id)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_mlog_mid_time ON maintenance_logs(machine_id, timestamp)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_c_timestamp ON machine_counters(timestamp)")
         conn.commit()
     finally:
         POOL.put(conn)
 
 def close_pool():
     POOL.close_all()
+
+
+# ---- added by repair_and_run.py ----
+import threading
+import logging
+
+_log = logging.getLogger(__name__)
+
+
+def quick_db_check() -> bool:
+    """Fast startup check: a pooled connection works and the schema is readable."""
+    conn = None
+    try:
+        conn = POOL.get()
+        conn.execute("SELECT name FROM sqlite_master LIMIT 1").fetchall()
+        return True
+    except sqlite3.DatabaseError as e:
+        _log.warning(f"quick_db_check failed: {e}")
+        return False
+    finally:
+        if conn is not None:
+            POOL.put(conn)
+
+
+def check_db_integrity_async(callback=None) -> None:
+    """Run PRAGMA integrity_check in a background thread, then call callback(bool)."""
+    def _run():
+        ok = False
+        try:
+            con = sqlite3.connect(DB_PATH)
+            try:
+                ok = con.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+            finally:
+                con.close()
+        except Exception as e:
+            _log.warning(f"Integrity check error: {e}")
+        if callback:
+            try:
+                callback(ok)
+            except Exception:
+                _log.exception("Integrity check callback failed")
+
+    threading.Thread(target=_run, daemon=True, name="DBIntegrityCheck").start()

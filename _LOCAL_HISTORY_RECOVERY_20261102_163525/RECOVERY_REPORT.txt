@@ -1,0 +1,9 @@
+VS Code Local History Recovery Report
+Project: D:\printshop_manager_v14 (3)\printshop_manager_v14 using
+Recovered copies: 1
+Failed: 0
+
+Recovered files:
+main.pyw
+
+Failures:
